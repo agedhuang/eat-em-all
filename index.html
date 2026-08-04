@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <!-- 移动端适配：禁用用户缩放，兼容 iPhone 刘海屏安全区 -->
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <!-- iOS 全屏 Web App 相关 -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#000000" />
+  <!-- 提前完成到 CDN 的 DNS + TLS 握手。模型有 5MB 要下，握手能省几百毫秒 -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <link rel="dns-prefetch" href="https://cdn.jsdelivr.net" />
+  <title>Eat 'Em All — AR MVP</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- AR 舞台：所有画面层级都放在这里 -->
+  <div id="stage">
+    <!--
+      video 必须带 autoplay / playsinline / muted：
+      - playsinline：阻止 iOS Safari 用原生全屏播放器劫持视频流
+      - muted：满足浏览器自动播放策略（无声视频才允许 autoplay）
+    -->
+    <video id="camera" autoplay playsinline muted webkit-playsinline></video>
+
+    <!-- 预留的绘制层（后续贴纸 / 拼贴素材画在这里，MVP 阶段不画面部网格） -->
+    <canvas id="overlay"></canvas>
+
+    <!--
+      M3 滤镜分成「背景层」和「前景层」两片，中间夹着抠出来的人像：
+
+        #filter-bg-layer  ← filter-bg-*  背景滤镜（在人后面）
+        #personLayer      ← 人像分割抠图结果
+        #filter-layer     ← 其他滤镜（眼睛贴图 / 皮肤 / 头饰，在人前面）
+
+      文件名以 filter-bg- 开头的自动进背景层，人物不会被遮挡。
+    -->
+    <div id="filter-bg-layer"></div>
+
+    <!-- 人像抠图画布：只画"人"，背景透明，让下方的背景滤镜透出来 -->
+    <canvas id="personLayer"></canvas>
+
+    <!-- 面部特效层：眼睛膨胀 + 皮肤焦黑，盖在人像上、滤镜贴图下 -->
+    <canvas id="eyeLayer"></canvas>
+
+    <!-- 前景滤镜层（贴在人身上的效果） -->
+    <div id="filter-layer"></div>
+
+    <!-- M2 掉落物图层：所有掉落物 / 炸弹的 DOM 都挂在这里（不镜像） -->
+    <div id="dropLayer"></div>
+
+    <!-- 吃到炸弹时的全屏红色闪烁层 -->
+    <div id="redFlash"></div>
+
+    <!-- 嘴部判定圈：正式 UI。开局起就显示，只有游戏结束时隐藏 -->
+    <div id="mouthMarker" class="hidden"></div>
+
+    <!-- 状态提示（加载中 / 报错 / 需要点击授权） -->
+    <div id="status">正在初始化摄像头…</div>
+
+    <!-- iOS 需要用户手势才能启动摄像头时的兜底按钮 -->
+    <button id="startBtn" class="hidden">点击开始</button>
+
+    <!-- M4 开场 CTA：只在页面首次加载时出现，点击开始后直接从 DOM 移除 -->
+    <img id="ctaStart" src="./assets/CTA_Start.webp" alt="" />
+
+    <!-- M4 全局操作提示：内容随游戏状态切换（开始 / 重玩） -->
+    <div id="hint"></div>
+
+    <!-- 倒计时：底图 + 数字。位置在 style.css 的 #countdown 里调。
+         初始带 hidden —— init 态只露 CTA，点击开始后由 JS 摘掉 -->
+    <div id="countdown" class="hidden"><span id="countdownNum">30</span></div>
+
+    <!-- 调试信息：实时张嘴比例 -->
+    <div id="debug"></div>
+  </div>
+
+  <!-- MediaPipe Face Mesh（Legacy Solutions）CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/face_mesh.js" crossorigin="anonymous"></script>
+  <!-- MediaPipe Selfie Segmentation：人像分割，用于背景滤镜的抠图 -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1/selfie_segmentation.js" crossorigin="anonymous"></script>
+
+  <script src="script.js"></script>
+</body>
+</html>

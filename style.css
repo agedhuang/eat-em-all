@@ -1,0 +1,702 @@
+/* ===== 全局重置：移动端全屏，禁止滚动与长按选中 ===== */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent; /* 去掉移动端点击高亮 */
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;                 /* 禁止页面滚动 / 橡皮筋效果 */
+  overscroll-behavior: none;
+  background: #000;
+  font-family: "Impact", "Haettenschweiler", "Arial Black", sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;       /* 禁用双击缩放 */
+}
+
+/* ===== 舞台：用 dvh 兼容移动端浏览器地址栏收缩 ===== */
+#stage {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+/* ===== 摄像头画面：全屏铺满且不变形 ===== */
+#camera {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;                /* 等比裁切铺满，不拉伸变形 */
+  transform: scaleX(-1);            /* 前置摄像头镜像，符合"照镜子"直觉 */
+  background: #000;
+}
+
+/* ===== 绘制层：与视频同尺寸叠加，MVP 阶段保持透明 ===== */
+#overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: scaleX(-1);            /* 与视频镜像保持一致 */
+  pointer-events: none;
+}
+
+/* ===== 状态提示条 ===== */
+#status {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: calc(env(safe-area-inset-top, 0px) + 16px);
+  max-width: 88vw;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+  text-align: center;
+  backdrop-filter: blur(6px);
+}
+
+/* ===== 兜底启动按钮 ===== */
+#startBtn {
+  position: absolute;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 48px);
+  transform: translateX(-50%);
+  padding: 16px 40px;
+  border: none;
+  border-radius: 999px;
+  background: #ff2e88;
+  color: #fff;
+  font-size: 18px;
+  font-family: -apple-system, "PingFang SC", sans-serif;
+  font-weight: 700;
+  box-shadow: 0 8px 24px rgba(255, 46, 136, 0.4);
+}
+
+/* ===== 调试信息 ===== */
+#debug {
+  position: absolute;
+  left: 12px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  color: rgba(255, 255, 255, 0.75);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+/* ===== 通用工具类 ===== */
+.hidden {
+  display: none !important;
+}
+
+/* =================================================================
+   M2 · 掉落与吞噬
+   ================================================================= */
+
+/* ----- 图层顺序：视频(0) < 滤镜(2) < 掉落物(5) < 红闪(20) < 文字/调试(30) ----- */
+#dropLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  overflow: hidden;                 /* 超出屏幕的掉落物不产生滚动条 */
+  pointer-events: none;
+  /* 注意：这一层「不做镜像」，掉落物是屏幕空间的实体，
+     嘴部坐标已经在 JS 里换算成屏幕坐标后再比对 */
+}
+
+#status,
+#startBtn,
+#debug { z-index: 30; }
+
+/* ----- 掉落物：双层结构 -----
+   外层 .drop-item 负责「定位」（JS 每帧写 transform）
+   内层 img 负责「表演」（CSS 动画写 transform: scale）
+   分开是必须的：如果定位和缩放写在同一个元素的 transform 上会互相覆盖，
+   而用独立的 scale 属性又会和 translate3d 相乘 —— 物体缩小时会朝左上角飞走。 */
+.drop-item {
+  position: absolute;
+  left: 0;
+  top: 0;
+  /* 定位由 JS 写入：translate3d(x, y, 0) translate(-50%, -50%) rotate(deg)
+     走 GPU 合成，比改 left/top 省一次布局重排，移动端帧率差别很明显 */
+  will-change: transform;
+  transform-origin: 50% 50%;
+}
+
+.drop-item img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform-origin: 50% 50%;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.35));
+}
+
+/* 炸弹加一点危险感的红色辉光 */
+.drop-item.is-bomb img {
+  filter: drop-shadow(0 0 10px rgba(255, 40, 40, 0.9))
+          drop-shadow(0 6px 10px rgba(0, 0, 0, 0.35));
+}
+
+/* ----- 吃到普通掉落物：极快的缩小消失 ----- */
+.drop-item.eaten img {
+  animation: eatPop 0.16s ease-in forwards;
+}
+
+@keyframes eatPop {
+  0%   { opacity: 1; transform: scale(1);    }
+  35%  { opacity: 1; transform: scale(1.25); }  /* 先轻微放大，"被吸进去"的顿挫感 */
+  100% { opacity: 0; transform: scale(0.1);  }
+}
+
+/* ----- 吃到炸弹：原地爆开 ----- */
+.drop-item.blasted img {
+  animation: bombBlast 0.22s ease-out forwards;
+}
+
+@keyframes bombBlast {
+  0%   { opacity: 1; transform: scale(1);   }
+  40%  { opacity: 1; transform: scale(1.8); }
+  100% { opacity: 0; transform: scale(2.4); }
+}
+
+/* ----- 炸弹惩罚：全屏红闪 ----- */
+#redFlash {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: #ff1f1f;
+  opacity: 0;
+  pointer-events: none;
+}
+
+#redFlash.flash {
+  animation: redFlash 0.32s ease-out;
+}
+
+@keyframes redFlash {
+  0%   { opacity: 0;    }
+  15%  { opacity: 0.62; }
+  100% { opacity: 0;    }
+}
+
+/* =================================================================
+   M3 · 滤镜图层（背景滤镜 / 人像抠图 / 前景滤镜）
+
+   最终图层顺序：
+     0  #camera            原始视频（始终保留）
+     1  #filter-bg-layer   filter-bg-* 背景滤镜  ← 在人后面
+     2  #personLayer       人像抠图（背景透明）
+     3  #eyeLayer          面部特效（眼睛膨胀 + 皮肤焦黑）← 盖在人像上
+     5  #filter-layer      跟踪型滤镜（眼镜/眼泪/头饰）← 在最前
+    10  #dropLayer         掉落物
+    20  #redFlash
+    30  文字与调试
+   ================================================================= */
+
+/*
+  pointer-events: none 是硬性要求 —— 这些层全屏铺满，
+  若能接收事件会挡住下方所有交互（包括 iOS 的"点击开始"兜底按钮）。
+*/
+#filter-bg-layer,
+#filter-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+#filter-bg-layer { z-index: 1; } /* 人物后面 */
+#filter-layer    { z-index: 5; } /* 人物前面 */
+
+/* 面部特效层。几何要求和 #personLayer 完全一样，否则变形区域会错位 */
+#eyeLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+  pointer-events: none;
+  display: none;                  /* 特效未触发时不参与合成 */
+}
+
+#eyeLayer.is-active {
+  display: block;
+}
+
+/*
+  人像抠图画布。
+  几何必须和 #camera 完全一致（object-fit: cover + scaleX(-1)），
+  否则抠出来的人和原视频会错位 —— 这一点最容易翻车。
+*/
+#personLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+  pointer-events: none;
+  display: none;                  /* 只有背景滤镜激活时才启用 */
+}
+
+#personLayer.is-active {
+  display: block;
+}
+
+/*
+  注意：原始视频「不隐藏」。
+  滤镜素材带 Alpha 通道，透明区域要露出用户真实的环境 —— 那就是下方的视频。
+  不透明区域自然会盖住视频，人像抠图再盖在相框上，所以人不会被遮挡。
+*/
+
+/* 单个滤镜相框。素材中间透明，所以直接盖在视频上就是"取景框"效果 */
+.filter-frame {
+  position: absolute;
+  inset: 0;
+  background-repeat: no-repeat;
+  background-position: center center;
+  /*
+    contain：等比缩放到「完整装得下」为止 —— 左右先顶到边就左右到顶，
+    上下先顶到边就上下到顶，多出来的方向留白（露出下方视频）。
+    对比 cover：铺满整个容器、超出部分被裁掉，竖屏手机上会把图放得非常大。
+    可在 script.js 的 GAME.FILTER_FIT 里改，这里只是兜底默认值。
+  */
+  background-size: contain;
+  pointer-events: none;
+  opacity: 0;
+  animation: filterFadeIn 0.42s ease-out forwards;
+}
+
+@keyframes filterFadeIn {
+  from { opacity: 0; transform: scale(1.06); } /* 轻微回缩，有"套上来"的感觉 */
+  to   { opacity: 1; transform: scale(1);     }
+}
+
+/* ----- 跟踪型滤镜（眼镜 / 元宝眼 / 头饰等贴合面部的贴图）-----
+   三层结构：
+     .filter-track-group  整体替换与淡出的抓手（'pair' 模式下含两个 part）
+     .filter-tracked      单个 part，由 JS 每帧写 transform 做定位+旋转
+     img                  播放淡入淡出动画
+   定位和动画必须分层，写在同一元素上会互相覆盖。 */
+.filter-track-group {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* 程序化特效的槽位占位元素：不渲染任何东西，只用于复用槽位互斥逻辑 */
+.filter-fx {
+  display: none;
+}
+
+.filter-tracked {
+  position: absolute;
+  left: 0;
+  top: 0;
+  will-change: transform;
+  transform-origin: 50% 50%;
+  pointer-events: none;
+}
+
+.filter-tracked img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  animation: filterFadeIn 0.42s ease-out forwards;
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.3));
+}
+
+/* 丢失人脸时隐藏。
+   用 visibility 而不是 display:none —— 后者会让内层 img 的淡入动画重置，
+   每次转头找回人脸都要重播一次淡入。 */
+.filter-tracked.is-lost {
+  visibility: hidden;
+}
+
+.filter-track-group.is-leaving img {
+  animation: filterFadeOut 0.3s ease-out forwards;
+}
+
+/*
+  被同槽位新滤镜顶掉的旧滤镜：淡出后由 JS 移除。
+  新滤镜是后 append 的、天然叠在上面，两者同时播放即为交叉溶解。
+  选择器比 .filter-frame 更具体，会覆盖掉上面的 filterFadeIn。
+*/
+.filter-frame.is-leaving {
+  animation: filterFadeOut 0.42s ease-out forwards;
+}
+
+@keyframes filterFadeOut {
+  from { opacity: 1; transform: scale(1);     }
+  to   { opacity: 0; transform: scale(0.97);  }
+}
+
+/* ----- 嘴部判定圈（正式 UI，不再是调试元素）-----
+   闭嘴：粉红虚线圈   张嘴：蓝色实线圈 + 25% 蓝色填充
+   ★ 颜色和线宽在这里改 ★ */
+#mouthMarker {
+  --mm-border: 3px;                       /* 线宽 */
+  --mm-closed: #FF0077;                   /* 闭嘴 —— 粉红 */
+  --mm-open: #00FBFF;                     /* 张嘴 —— 蓝 */
+  --mm-open-fill: rgba(0, 251, 255, 0.25); /* 张嘴时的填充，25% 不透明度 */
+
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 30;
+  border: var(--mm-border) dashed var(--mm-closed);
+  border-radius: 50%;
+  pointer-events: none;
+  will-change: transform;
+  /* 视频背景明暗不可控，加一点外发光保证任何画面上都看得清边界 */
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.45);
+}
+
+#mouthMarker.is-open {
+  border-style: dashed;
+  border-color: var(--mm-open);
+  background: var(--mm-open-fill);
+}
+
+/* =================================================================
+   M3 · 滤镜图层（背景滤镜 / 人像抠图 / 前景滤镜）
+
+   最终图层顺序：
+     0  #camera            原始视频（始终保留）
+     1  #filter-bg-layer   filter-bg-* 背景滤镜  ← 在人后面
+     2  #personLayer       人像抠图（背景透明）
+     3  #eyeLayer          面部特效（眼睛膨胀 + 皮肤焦黑）← 盖在人像上
+     5  #filter-layer      跟踪型滤镜（眼镜/眼泪/头饰）← 在最前
+    10  #dropLayer         掉落物
+    20  #redFlash
+    30  文字与调试
+   ================================================================= */
+
+/*
+  pointer-events: none 是硬性要求 —— 这些层全屏铺满，
+  若能接收事件会挡住下方所有交互（包括 iOS 的"点击开始"兜底按钮）。
+*/
+#filter-bg-layer,
+#filter-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+#filter-bg-layer { z-index: 1; } /* 人物后面 */
+#filter-layer    { z-index: 5; } /* 人物前面 */
+
+/* 面部特效层。几何要求和 #personLayer 完全一样，否则变形区域会错位 */
+#eyeLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+  pointer-events: none;
+  display: none;                  /* 特效未触发时不参与合成 */
+}
+
+#eyeLayer.is-active {
+  display: block;
+}
+
+/*
+  人像抠图画布。
+  几何必须和 #camera 完全一致（object-fit: cover + scaleX(-1)），
+  否则抠出来的人和原视频会错位 —— 这一点最容易翻车。
+*/
+#personLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+  pointer-events: none;
+  display: none;                  /* 只有背景滤镜激活时才启用 */
+}
+
+#personLayer.is-active {
+  display: block;
+}
+
+/*
+  注意：原始视频「不隐藏」。
+  滤镜素材带 Alpha 通道，透明区域要露出用户真实的环境 —— 那就是下方的视频。
+  不透明区域自然会盖住视频，人像抠图再盖在相框上，所以人不会被遮挡。
+*/
+
+/* 单个滤镜相框。素材中间透明，所以直接盖在视频上就是"取景框"效果 */
+.filter-frame {
+  position: absolute;
+  inset: 0;
+  background-repeat: no-repeat;
+  background-position: center center;
+  /*
+    contain：等比缩放到「完整装得下」为止 —— 左右先顶到边就左右到顶，
+    上下先顶到边就上下到顶，多出来的方向留白（露出下方视频）。
+    对比 cover：铺满整个容器、超出部分被裁掉，竖屏手机上会把图放得非常大。
+    可在 script.js 的 GAME.FILTER_FIT 里改，这里只是兜底默认值。
+  */
+  background-size: contain;
+  pointer-events: none;
+  opacity: 0;
+  animation: filterFadeIn 0.42s ease-out forwards;
+}
+
+@keyframes filterFadeIn {
+  from { opacity: 0; transform: scale(1.06); } /* 轻微回缩，有"套上来"的感觉 */
+  to   { opacity: 1; transform: scale(1);     }
+}
+
+/* ----- 跟踪型滤镜（眼镜 / 元宝眼 / 头饰等贴合面部的贴图）-----
+   三层结构：
+     .filter-track-group  整体替换与淡出的抓手（'pair' 模式下含两个 part）
+     .filter-tracked      单个 part，由 JS 每帧写 transform 做定位+旋转
+     img                  播放淡入淡出动画
+   定位和动画必须分层，写在同一元素上会互相覆盖。 */
+.filter-track-group {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* 程序化特效的槽位占位元素：不渲染任何东西，只用于复用槽位互斥逻辑 */
+.filter-fx {
+  display: none;
+}
+
+.filter-tracked {
+  position: absolute;
+  left: 0;
+  top: 0;
+  will-change: transform;
+  transform-origin: 50% 50%;
+  pointer-events: none;
+}
+
+.filter-tracked img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  animation: filterFadeIn 0.42s ease-out forwards;
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.3));
+}
+
+/* 丢失人脸时隐藏。
+   用 visibility 而不是 display:none —— 后者会让内层 img 的淡入动画重置，
+   每次转头找回人脸都要重播一次淡入。 */
+.filter-tracked.is-lost {
+  visibility: hidden;
+}
+
+.filter-track-group.is-leaving img {
+  animation: filterFadeOut 0.3s ease-out forwards;
+}
+
+/*
+  被同槽位新滤镜顶掉的旧滤镜：淡出后由 JS 移除。
+  新滤镜是后 append 的、天然叠在上面，两者同时播放即为交叉溶解。
+  选择器比 .filter-frame 更具体，会覆盖掉上面的 filterFadeIn。
+*/
+.filter-frame.is-leaving {
+  animation: filterFadeOut 0.42s ease-out forwards;
+}
+
+@keyframes filterFadeOut {
+  from { opacity: 1; transform: scale(1);     }
+  to   { opacity: 0; transform: scale(0.97);  }
+}
+
+/* =================================================================
+   倒计时（底图 + 数字）
+
+   ★ 要调位置和大小，只动下面这四个变量，别的都不用碰 ★
+   ================================================================= */
+
+@font-face {
+  font-family: "Michaux Test";
+  src: url("./font/MichauxTest-Regular.otf") format("opentype");
+  font-weight: normal;
+  font-display: swap;
+}
+
+#countdown {
+  /* ↓↓↓ 手动微调只改这五行 ↓↓↓ */
+  --cd-size: 34vw;       /* 底图宽度。用 vw 才能随屏幕宽度缩放，高度按 320:328 自动算 */
+  --cd-top: 60px;        /* 距屏幕顶部（刘海安全区自动叠加，不用自己加） */
+  --cd-dx: 0px;          /* 水平微调，相对屏幕水平中线，正数往右 */
+  --cd-num-ratio: 0.54;  /* 数字大小 = 底图宽 × 这个比例 */
+  --cd-num-dy: 0.026;    /* 数字在底图内的上下微调，单位是底图高的比例，正数往下 */
+  /* ↑↑↑ 手动微调只改这五行 ↑↑↑ */
+
+  /*
+    为什么 --cd-num-ratio 要 0.5 以上：
+    底图是爆炸星形，实测中心真正的净空只有整图宽度的 65%（其余是尖刺和透明留白）。
+    所以按整图宽算的字号必须给大，看起来才和那块黄色区域成比例。
+    --cd-num-dy 也是实测值：黄色区中心比图片几何中心偏下 2.6%。
+  */
+
+  /* 水平居中、垂直靠上。
+     两段 translate 分工：前一段负责水平居中，后一段是纯偏移量 ——
+     分开写才不用把 -50% 和微调值混算 */
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + var(--cd-top));
+  left: 50%;
+  transform: translateX(-50%) translateX(var(--cd-dx));
+  z-index: 35;
+
+  width: var(--cd-size);
+  /*
+    高度显式算出来，不用 aspect-ratio。
+    aspect-ratio 要 Safari 15 才支持 —— 老一点的 iOS 上它会被忽略，
+    高度于是塌成 flex 子项（那个数字）的高度，background-size: contain
+    再把底图缩到那个高度，结果就是"底图看起来比数字还小"。
+    calc 版本所有浏览器都支持，行为完全一致。
+  */
+  height: calc(var(--cd-size) * 328 / 320);
+
+  background-image: url("./assets/countdown-bg.webp");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  pointer-events: none;
+  user-select: none;
+}
+
+#countdownNum {
+  color: #ED50B8;
+  /* 3px 外描边。
+     paint-order: stroke fill 让描边画在字形「下面」，
+     于是 3px 全部长在外侧 —— 不加这句的话 -webkit-text-stroke 是居中描边，
+     会往字里啃掉 1.5px，笔画看着变细。 */
+  -webkit-text-stroke: 2px #4A0909;
+  /* paint-order: stroke fill; */
+  font-family: "Michaux Test", "Impact", sans-serif;
+  /* 字号和位移都按 --cd-size 的比例算，所以改一个 --cd-size
+     整套（底图 / 数字 / 描边视觉粗细的相对关系）会一起等比缩放 */
+  font-size: calc(var(--cd-size) * var(--cd-num-ratio));
+  line-height: 1;
+  letter-spacing: 0;
+  transform: translateY(calc(var(--cd-size) * 328 / 320 * var(--cd-num-dy)));
+  font-variant-numeric: tabular-nums; /* 等宽数字，15→14 时不会左右跳动 */
+}
+
+/* =================================================================
+   M4 · 生命周期 UI（开场 CTA + 全局操作提示）
+   ================================================================= */
+
+/* 开场图。只在首次加载出现，点击后由 JS 直接 remove()，
+   不是 display:none —— 从 DOM 移除才能物理保证 restart 时不会再冒出来。 */
+#ctaStart {
+  --cta-width: 86vw;   /* ★ 大小：屏幕宽度的百分比 ★ */
+
+  position: fixed;
+  top: 40%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 36;
+
+  width: var(--cta-width);
+  height: auto;
+
+  pointer-events: none;   /* 点击由 document 上唯一的监听器接管 */
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* 底部操作提示。开始态和结束态共用同一个元素、同一套样式，只换文案。 */
+#hint {
+  --hint-bottom: 12%;    /* 距底部 */
+  --hint-size: 24px;     /* ★ 字号在这里改 ★ */
+  --hint-stroke: 5px;    /* ★ 描边粗细在这里改 ★ */
+  --hint-stroke-color: #F7EFDC; /* ★ 描边颜色在这里改 */
+  --hint-pulse-time: 1.6s; /* 呼吸动画周期 */
+  --hint-pulse-scale: 1.03; /* 呼吸动画缩放比例 */
+  /*
+    居中「不」用 transform —— 改成左右撑满 + text-align: center。
+    原因：transform 要同时承担居中(-50%)和呼吸缩放，而 Safari 对
+    @keyframes 里的 var() 解析有历史 bug，一旦解析失败整个 transform 就变成
+    none，translateX(-50%) 跟着失效，文字会往右偏半个自身宽度。
+    把居中交给布局、transform 只管缩放，这类问题就不存在了。
+  */
+  position: fixed;
+  bottom: var(--hint-bottom);
+  left: 0;
+  right: 0;
+  text-align: center;
+  z-index: 36;
+
+  color: #ff2e5f;
+  font-family: Helvetica, "Helvetica Neue", Arial, sans-serif;
+  font-size: var(--hint-size);
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+
+  /* 描边而非阴影。paint-order: stroke fill 让描边画在字形下面，
+     线宽全部长在外侧 —— 不加这句是居中描边，会往字里啃掉一半，笔画变细 */
+  -webkit-text-stroke: var(--hint-stroke) var(--hint-stroke-color);
+  paint-order: stroke fill;
+
+  /* 呼吸动画。transform 现在只管缩放，不掺和居中 */
+  animation: hintBreathe var(--hint-pulse-time) ease-in-out infinite;
+  transform-origin: 50% 50%;
+
+  pointer-events: none;
+  user-select: none;
+}
+
+@keyframes hintBreathe {
+  0%,
+  100% { transform: scale(1); }
+  /* 带兜底值：万一 var() 在某些 Safari 版本里解析失败，也只是不缩放，不会错位 */
+  50%  { transform: scale(var(--hint-pulse-scale, 1.09)); }
+}
+
+/* 空文案时自动隐藏，省掉一个额外的 class 开关 */
+#hint:empty {
+  display: none;
+}
+
+/* =================================================================
+   宽屏封顶
+
+   CTA 和倒计时都用 vw 做尺寸，好处是手机上随屏宽自动缩放；
+   但桌面上 vw 会大到离谱，所以在宽屏下改回固定 px。
+   用 media query 而不是 min() —— 对老浏览器更稳，且一眼能看出断点在哪。
+   ================================================================= */
+@media (min-width: 600px) {
+  #ctaStart  { --cta-width: 500px; }
+  #countdown { --cd-size: 190px; }
+}
