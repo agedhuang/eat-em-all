@@ -378,8 +378,8 @@ const GAME = {
   HINTS: {
     loading: 'loading',
     failed: 'loading failed — check network and reload',
-    start: 'press anywhere to start',
-    restart: 'press anywhere to restart',
+    start: 'press anywhere to START',
+    restart: 'press anywhere to RESTART',
   },
   // 素材 + 模型都没就绪超过这么久，就认定失败并提示刷新（秒）
   READY_TIMEOUT: 30,

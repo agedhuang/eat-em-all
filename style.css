@@ -642,7 +642,7 @@ body {
   --hint-stroke: 5px;    /* ★ 描边粗细在这里改 ★ */
   --hint-stroke-color: #F7EFDC; /* ★ 描边颜色在这里改 */
   --hint-pulse-time: 1.6s; /* 呼吸动画周期 */
-  --hint-pulse-scale: 1.03; /* 呼吸动画缩放比例 */
+  --hint-pulse-scale: 1.07; /* 呼吸动画缩放比例 */
   /*
     居中「不」用 transform —— 改成左右撑满 + text-align: center。
     原因：transform 要同时承担居中(-50%)和呼吸缩放，而 Safari 对
@@ -660,7 +660,7 @@ body {
   color: #ff2e5f;
   font-family: Helvetica, "Helvetica Neue", Arial, sans-serif;
   font-size: var(--hint-size);
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: 0.5px;
   white-space: nowrap;
 
@@ -697,6 +697,6 @@ body {
    用 media query 而不是 min() —— 对老浏览器更稳，且一眼能看出断点在哪。
    ================================================================= */
 @media (min-width: 600px) {
-  #ctaStart  { --cta-width: 500px; }
+  #ctaStart  { --cta-width: 580px; }
   #countdown { --cd-size: 190px; }
 }
