@@ -1,9 +1,14 @@
 # Eat 'Em All — 怪诞拼贴 AR 游戏 · 项目文档 (PRD & WorkLog)
 
-> 项目定位：Design Challenge 作品 —— 移动端优先的 Web AR 面部互动游戏
-> 交付目标：面试官用手机浏览器打开链接即可上手玩，不涉及 TikTok in-app WebView 环境
-> 技术栈：原生 HTML / CSS / JS + MediaPipe Face Mesh（Legacy Solutions, CDN）
+> 项目定位：Design Challenge 作品 —— 移动端优先的 Web AR 面部互动游戏 **Demo**
+> 交付目标：手机浏览器打开链接即可上手玩，不涉及 TikTok in-app WebView 环境
+> 技术栈：原生 HTML / CSS / JS + MediaPipe Face Mesh / Selfie Segmentation（CDN）
 > 视觉风格：新中式怪诞拼贴，高饱和度，半调网点 (Halftone)
+>
+> **状态：已完成并上线（2026-08-03）。**
+> 这是一个用于展示 Web AR 交互设计的 Demo，不是要长期运营的正式游戏 ——
+> 所以下面记录的取舍都是围绕"能不能在手机上打开就玩"这一个目标做的，
+> 没有做正式产品该有的多机型适配、埋点、错误上报和运营配置。
 
 ---
 
@@ -30,11 +35,13 @@
 | M2 | 高阶游戏循环：独立重力 / S型飘移 / 伴星炸弹 + 单独炸弹 / 吞噬判定 | ✅ 已完成 | 2026-08-02 |
 | M3 | 滤镜状态机与特效渲染：五套滤镜 + 人像抠图 + 面部变形 | ✅ 已完成 | 2026-08-03 |
 | M4 | 生命周期闭环：开场 CTA / 倒计时 / 结束 / 重玩状态机 | ✅ 已完成 | 2026-08-03 |
-| M5 | 性能调优、素材压缩 | ⬜ 待开始 | — |
+| M5 | 上线：响应式尺寸、加载门禁、素材全量 WebP、GitHub Pages 部署 | ✅ 已完成 | 2026-08-03 |
 
 > M1 原计划做"贴纸跟随面部"，实际在 M3 里以「跟踪型滤镜」的形式一并交付了
 > （`filter-eye-*` / `filter-head-*` 跟随 landmark 做位移/缩放/旋转），
 > 没有单独的 M1 阶段产物。
+>
+> **项目到 M5 收尾。** 作为 Demo 目标已达成，不再继续迭代。
 
 ---
 
@@ -996,22 +1003,63 @@ function uiPx(ratio) {
 异常从 `updatePhysics` 冒到 `gameLoop`，**rAF 链断掉整个游戏卡死**。
 `node --check` 完全查不出这类问题。
 
-## 📋 下一步（M5）
+## 🚢 上线
 
-按优先级排：
+GitHub Pages，纯静态、无构建、无后端。
 
-**必做**
-- [ ] **真机实测**：Face Mesh + Selfie Segmentation 双模型同帧运行，中低端安卓机的帧率。
-      留了 `SEG_FRAME_SKIP`（设 `1` 隔帧省一半算力）和 `SEG_MODEL`（`1` 是更快的 landscape 模型）两个降级开关，桌面上看不出问题。
-- [ ] **上线前**：`CONFIG.DEBUG` 改成 `false`（关掉左下角 ratio 和嘴部判定圈）。
+```
+仓库 → Settings → Pages → Deploy from a branch → main / (root)
+```
 
-**待定的设计决策**
-- [ ] **难度平衡**：炸弹占比 50% + 掉落密度 ×2.5，导致"时间到"几乎走不到（见 M4）
+两件和这个项目有关的部署前提：
 
-**优化**
-- [ ] `filter-bg-hotpot.webp` 636KB → 压到 300KB 以内
-- [ ] 掉落物 PNG → WebP（只改 `GAME.NORMAL_ASSETS` 的 `file` 字段）
-- [ ] MediaPipe 模型本地化（现在走 jsDelivr CDN，国内网络可能慢或被墙）
+- **必须 HTTPS**。`getUserMedia` 是安全上下文 API，HTTP 域名下一定拿不到摄像头。
+  `*.github.io` 自带 HTTPS；若绑自定义域名，务必勾上 **Enforce HTTPS**。
+- **全部用相对路径**（`./assets/...`）。Pages 把站点挂在 `/<repo>/` 子目录下，
+  任何以 `/` 开头的路径都会 404。
+- **大小写必须精确**。macOS 文件系统不区分大小写、Pages 的 Linux 区分 ——
+  `CTA_Start.webp` 这类带大写的最容易踩：本地一切正常，线上白屏。上线前逐个核对过。
+
+上线前把 `CONFIG.DEBUG` 改成 `false`，关掉左下角的调试文字
+（嘴部判定圈不受这个开关控制，它是正式 UI）。
+
+---
+
+## 🧾 收尾：明知而未做的事
+
+Demo 到此结束。下面这些都是**清楚知道、但按 Demo 目标判断不值得做**的，
+留档避免以后误以为是遗漏。
+
+### 性能
+
+| 项 | 现状 | 为什么没做 |
+| --- | --- | --- |
+| 背景滤镜激活时追踪冻结 2–4 秒 | 未修 | 第一次 `selfieSeg.send()` 内部要下 1.7MB + 编译 wasm，而它和 `faceMesh.send()` 在同一个 `isSending` 临界区里。正解是**开局预热 + 把分割移出临界区**，工作量不小，Demo 里只发生一次、可接受 |
+| 掉落物 `drop-shadow` | 未改 | 约 45 个元素各一个 GPU pass（炸弹两个）。把阴影烘进 WebP 就能省掉，但要重出素材 |
+| `updateFaceFx` 以 60fps 重绘 15–30fps 才变的内容 | 未改 | 约 2 倍无效画布重绘。真机上没到卡的程度 |
+| 离屏画布每帧重分配 | 未改 | `drawMagnifiedCircle` 的 `d` 跟瞳距走，差 1px 就触发 canvas 重分配。量化到 8px 即可解决 |
+| 每帧约 180 次 `toFixed` | 未改 | 拼 transform 字符串的临时对象，老机器上是 GC 压力 |
+| `refineLandmarks: true` | 保留 | 关掉能省两三成算力，但眼镜/元宝的锚点要退回眼角，眨眼时会漂 |
+| 摄像头分辨率 640×480 | 保留 | 降到 480×360 能省 44% 像素开销，但这是给内容创作者用的 —— **脸必须清晰，不能拿画质换帧率** |
+
+### 玩法与打磨
+
+- **难度没有做平衡**：含炸弹的组合体占 66%，吃到即结束。实测判定半径只有屏宽的
+  7.5%，不主动去吃很难碰上，所以"时间到"这条路径仍然走得到 —— 但没有做过正式的
+  难度曲线设计。
+- **没有分数**：M2 就明确去掉了计分，只保留吞噬反馈。
+- **归零和被炸的结局完全一样**：都是停止生成 + 清场，没有区分文案或动画。
+- **重玩靠状态机而非刷新**：滤镜、特效、倒计时都会正确复位，但 MediaPipe 实例是复用的
+  （刻意的 —— 重建会重新下载模型）。
+
+### 工程
+
+- **没有测试框架**。靠 `node --check` + 手写的 `vm` 桩件跑运行时验证（见「验证方式」）。
+- **MediaPipe 走 CDN**，没有本地化。国内网络下首屏 5.2MB 会明显偏慢；
+  Pages 自带 brotli，本地化后 wasm 能压到约 1.3MB，但仓库要多约 10MB。
+- **没有 in-app WebView 兜底**。iOS 上 TikTok / IG 的内置浏览器对 `getUserMedia`
+  支持很差，但 Demo 的使用场景是直接用系统浏览器打开，不需要。
+- **没有埋点、错误上报、多机型矩阵测试**。实测设备只有桌面 Chrome + iPad + iPhone。
 
 ---
 
@@ -1026,9 +1074,16 @@ eat-em-all/
 ├── font/
 │   └── MichauxTest-Regular.otf   倒计时数字字体
 └── assets/
-    ├── countdown-bg.png          倒计时底图
-    ├── fallenObjects/            5 个掉落物（PNG）
-    └── filter/                   7 个滤镜素材（WebP）
+    ├── CTA_Start.webp            开场 CTA 图
+    ├── countdown-bg.webp         倒计时底图
+    ├── fallenObjects/            5 个掉落物
+    └── filter/                   7 个滤镜素材
 ```
 
-单文件无构建、无依赖 —— 直接起静态服务就能跑，这是为了移动端首屏和部署简单刻意保持的。
+图片全部 WebP，合计约 1.2MB。三个源文件、零构建、零依赖 ——
+直接起静态服务就能跑，这是为了首屏速度和部署简单刻意保持的。
+
+```bash
+python3 -m http.server 8000     # 本地
+npx localtunnel --port 8000     # 手机真机（需要 HTTPS）
+```
