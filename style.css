@@ -638,7 +638,7 @@ body {
 /* 底部操作提示。开始态和结束态共用同一个元素、同一套样式，只换文案。 */
 #hint {
   --hint-bottom: 12%;    /* 距底部 */
-  --hint-size: 24px;     /* ★ 字号在这里改 ★ */
+  --hint-size: 20px;     /* ★ 字号在这里改 ★ */
   --hint-stroke: 5px;    /* ★ 描边粗细在这里改 ★ */
   --hint-stroke-color: #F7EFDC; /* ★ 描边颜色在这里改 */
   --hint-pulse-time: 1.6s; /* 呼吸动画周期 */
