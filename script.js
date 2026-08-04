@@ -418,14 +418,14 @@ const GAME = {
     eye: {
       anchor: 'eyes',      // 锚定双眼连线
       mode: 'span',        // 'span' = 一张图横跨双眼；'pair' = 每只眼睛各一张
-      widthFactor: 2.35,   // 贴图宽度 ÷ 瞳距。素材本身 587px 宽、瞳距约 250px → 2.35
+      widthFactor: 2.0,   // 贴图宽度 ÷ 瞳距。素材本身 587px 宽、瞳距约 250px → 2.35
       offsetFactor: 0.02,  // 沿"垂直于眼线"方向微调，正数向下，单位同样是瞳距的倍数
       followsBulge: true,  // 眼睛膨胀时贴图跟着一起变大
       bulgeOnActivate: true, // 激活时触发眼睛膨胀。眼泪这类"负面"素材可按文件关掉
     },
     head: {
       anchor: 'head',      // 锚定额顶 + 面部宽度
-      widthFactor: 3.0,   // 贴图宽度 ÷ 太阳穴间距。皇冠要比头略宽才不显小气
+      widthFactor: 2.4,   // 贴图宽度 ÷ 太阳穴间距。皇冠要比头略宽才不显小气
       offsetFactor: 0.34,  // 沿"头顶方向"上移，单位为太阳穴间距的倍数
       followsBulge: false, // 皇冠不参与眼睛膨胀
     },
@@ -439,7 +439,7 @@ const GAME = {
   FILTER_TRACK_BY_FILE: {
     'filter-eye-gold': {
       mode: 'pair',        // 元宝是单个的 → 左右眼各贴一个
-      widthFactor: 0.8,   // 'pair' 模式下宽度仍以瞳距为基准
+      widthFactor: 0.7,   // 'pair' 模式下宽度仍以瞳距为基准
       offsetFactor: 0.0,
     },
     'filter-eye-bomb': {
@@ -452,8 +452,8 @@ const GAME = {
       bulgeOnActivate: false,
     },
     'filter-head-bomb': {
-      widthFactor: 3.0,    // 爆炸头要盖住整个脑袋，比皇冠大不少
-      offsetFactor: 0.35,  // 正 = 向上。素材重心偏下，上移量比皇冠小
+      widthFactor: 2.8,    // 爆炸头要盖住整个脑袋，比皇冠大不少
+      offsetFactor: 0.25,  // 正 = 向上。素材重心偏下，上移量比皇冠小
       // 正 = 向屏幕右。这张图的毛发团在画面左侧、粉色「完」星在右上，
       // 图片几何中心并不是"头"的中心，所以要把整张图往右推一点才正
       offsetXFactor: 0.28,
@@ -785,6 +785,11 @@ function triggerGameOver(reason = 'bomb') {
   // 本函数是从 updatePhysics 遍历 groups 的过程中调用的，
   // 当场清空会让外层倒序循环下一轮取到 undefined 直接崩。
   // 真正的清场交给循环结束后的 clearAllDrops()。
+
+  // 倒计时藏掉，理由和判定圈一样：结束后的主角是玩家脸上那堆滤镜。
+  // 而且它就在屏幕顶部正中，和头饰滤镜（皇冠 / 爆炸头）抢的是同一块位置。
+  // 重玩不用管 —— startRound() 里本来就会把它放出来。
+  countdownEl.classList.add('hidden');
 
   // 结束态的提示文案。CTA 开场图不再出现，只换这一行文字
   setHint(GAME.HINTS.restart);
