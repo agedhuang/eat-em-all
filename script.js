@@ -452,7 +452,7 @@ const GAME = {
       bulgeOnActivate: false,
     },
     'filter-head-bomb': {
-      widthFactor: 2.8,    // 爆炸头要盖住整个脑袋，比皇冠大不少
+      widthFactor: 2.55,    // 爆炸头要盖住整个脑袋，比皇冠大不少
       offsetFactor: 0.25,  // 正 = 向上。素材重心偏下，上移量比皇冠小
       // 正 = 向屏幕右。这张图的毛发团在画面左侧、粉色「完」星在右上，
       // 图片几何中心并不是"头"的中心，所以要把整张图往右推一点才正

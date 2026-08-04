@@ -638,8 +638,19 @@ body {
 /* 底部操作提示。开始态和结束态共用同一个元素、同一套样式，只换文案。 */
 #hint {
   --hint-bottom: 12%;    /* 距底部 */
-  --hint-size: 20px;     /* ★ 字号在这里改 ★ */
-  --hint-stroke: 5px;    /* ★ 描边粗细在这里改 ★ */
+  /*
+    ★ 字号在这里改 ★  clamp(最小, 随屏宽, 最大)
+    中间那项是屏宽的百分比，两端把它夹住：
+    小屏不至于挤满一行，大屏也不会无限放大。
+    实际值：320→13px  375→16px  390→16px  430→18px  ≥453→19px
+  */
+  --hint-size: clamp(12px, 4.2vw, 19px);
+  /*
+    ★ 描边粗细 ★ 用 em 而不是 px —— em 是相对字号的，
+    字号缩小时描边会等比变细。写死 px 的话小屏上 5px 描边会把字啃没。
+    0.28em ≈ 原来 18px 字配 5px 描边的比例
+  */
+  --hint-stroke: 0.28em;
   --hint-stroke-color: #F7EFDC; /* ★ 描边颜色在这里改 */
   --hint-pulse-time: 1.6s; /* 呼吸动画周期 */
   --hint-pulse-scale: 1.07; /* 呼吸动画缩放比例 */
@@ -661,7 +672,7 @@ body {
   font-family: Helvetica, "Helvetica Neue", Arial, sans-serif;
   font-size: var(--hint-size);
   font-weight: 600;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.03em;   /* 同样用 em，跟着字号缩放 */
   white-space: nowrap;
 
   /* 描边而非阴影。paint-order: stroke fill 让描边画在字形下面，
