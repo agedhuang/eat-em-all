@@ -287,10 +287,12 @@ document.addEventListener('visibilitychange', () => {
     if (rafId) cancelAnimationFrame(rafId);
     rafId = null;
     stopGameLoop(); // [M2] 物理循环一并暂停
+    setBgmPaused(true);
   } else if (!rafId && faceMesh) {
     renderLoop();
     // init 态还没开局，别把物理循环拉起来
     if (gameState !== 'init') startGameLoop();
+    setBgmPaused(false);
   }
 });
 
@@ -384,6 +386,31 @@ const GAME = {
   // 素材 + 模型都没就绪超过这么久，就认定失败并提示刷新（秒）
   READY_TIMEOUT: 30,
 
+  // ---- 音频 ----
+  AUDIO: {
+    ENABLED: true,
+    DIR: './assets/audio/',
+    // 背景音乐：设为 null = 不加载、不播放。
+    // 刻意不做 —— 真实的 TikTok Effect 里音轨属于创作者（说话/吐槽）或平台的
+    // 流行音乐，自带 BGM 是在和那层抢；而且 <audio> 会被 iOS 物理静音键静音，
+    // 相当一部分观众根本听不到，不适合承载氛围。要加就填文件名。
+    BGM: null,
+    SFX: {
+      eat:  'sfx-eat.mp3',      // 吃到普通掉落物
+      bomb: 'bomb.mp3',         // 吃到炸弹
+    },
+    BGM_VOLUME: 0.40,
+    SFX_VOLUME: 0.90,
+    // 吃掉落物的音高随机浮动。连着吃时音高完全一致会像机枪，
+    // 加一点抖动听起来才自然
+    EAT_PITCH_JITTER: 0.12,
+    // 吃到炸弹的震动。数组是 [震, 停, 震, 停…] 的毫秒序列 ——
+    // 用两段而不是一下长震，"炸"的感觉更强（先一个爆点，再一段余震）。
+    // ⚠️ iOS Safari 完全不支持 navigator.vibrate，iPhone / iPad 上不会有反应，
+    // 这是浏览器限制，不是代码问题。安卓 Chrome 正常。
+    VIBRATE_BOMB: [45, 35, 160],
+  },
+
   // ---- M3 滤镜 ----
   // 「吃到某个 key 的掉落物 → 激活对应滤镜」的映射表。
   // 表里没有的 key 不触发任何滤镜，之后加新滤镜只要在这里加一行。
@@ -452,8 +479,8 @@ const GAME = {
       bulgeOnActivate: false,
     },
     'filter-head-bomb': {
-      widthFactor: 2.55,    // 爆炸头要盖住整个脑袋，比皇冠大不少
-      offsetFactor: 0.25,  // 正 = 向上。素材重心偏下，上移量比皇冠小
+      widthFactor: 2.6,    // 爆炸头要盖住整个脑袋，比皇冠大不少
+      offsetFactor: 0.2,  // 正 = 向上。素材重心偏下，上移量比皇冠小
       // 正 = 向屏幕右。这张图的毛发团在画面左侧、粉色「完」星在右上，
       // 图片几何中心并不是"头"的中心，所以要把整张图往右推一点才正
       offsetXFactor: 0.28,
@@ -755,6 +782,7 @@ function spawnGroup() {
 
 /** 吃到普通掉落物：快速缩小消失 */
 function eatEntity(entity) {
+  playSfx('eat', GAME.AUDIO.EAT_PITCH_JITTER);
   entity.alive = false;
   entity.el.classList.add('eaten');
   entity.img.addEventListener('animationend', () => entity.el.remove(), { once: true });
@@ -762,13 +790,15 @@ function eatEntity(entity) {
 
 /** 吃到炸弹：原地爆开 + 全屏红闪一次 */
 function explodeEntity(entity) {
+  playSfx('bomb');
   entity.alive = false;
   entity.el.classList.add('blasted');
   entity.img.addEventListener('animationend', () => entity.el.remove(), { once: true });
   triggerRedFlash();
 
-  // 有震动能力的设备补一下触觉反馈（iOS Safari 不支持，会被忽略）
-  if (navigator.vibrate) navigator.vibrate(120);
+  // 触觉反馈。iOS Safari 不支持 navigator.vibrate，那边会静默忽略
+  const pattern = GAME.AUDIO.VIBRATE_BOMB;
+  if (pattern && navigator.vibrate) navigator.vibrate(pattern);
 }
 
 /**
@@ -1815,6 +1845,115 @@ function preloadImages(urls, onProgress) {
 }
 
 /* =====================================================================
+ *  音频
+ *
+ *  移动端两个硬约束决定了这里的架构：
+ *
+ *  1. 必须由用户手势解锁。iOS / Android 都不允许无交互自动播放，
+ *     所以解锁挂在「开局那一次点击」上 —— 复用已有的 pointerdown，
+ *     不新增监听器。
+ *  2. 音效会密集重叠。吃掉落物可能一秒好几次，用 <audio> 元素做不到重叠
+ *     （同一个元素重新 play 会打断上一次），所以音效走 WebAudio ——
+ *     每次播放新建一个 BufferSource，天然可以叠。
+ *
+ *  背景音乐反过来：只有一路、要循环、文件可能较大，用 <audio> 元素更合适
+ *  （边下边播，不必整段解码进内存）。
+ * ===================================================================== */
+
+let audioCtx = null;
+let sfxGain = null;
+const sfxBuffers = {};      // name → AudioBuffer
+let bgmEl = null;
+let audioReady = false;     // 音效已解码
+let audioUnlocked = false;  // 用户手势已解锁
+
+/**
+ * 建 AudioContext 并解码全部音效。
+ * 可以在用户手势「之前」调用 —— 此时 context 是 suspended 状态，
+ * 但 decodeAudioData 依然可用，所以能和图片素材并行预载。
+ *
+ * 任何一个文件缺失或解码失败都只影响它自己，不影响游戏运行。
+ */
+async function initAudio() {
+  if (!GAME.AUDIO.ENABLED) return;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) {
+    console.warn('[audio] 浏览器不支持 WebAudio，音效将静音');
+    return;
+  }
+
+  audioCtx = new Ctx();
+  sfxGain = audioCtx.createGain();
+  sfxGain.gain.value = GAME.AUDIO.SFX_VOLUME;
+  sfxGain.connect(audioCtx.destination);
+
+  // 背景音乐：<audio> 元素，边下边播。BGM 为 null 时整段跳过，不产生任何请求
+  if (GAME.AUDIO.BGM) {
+    bgmEl = new Audio();
+    bgmEl.src = GAME.AUDIO.DIR + GAME.AUDIO.BGM;
+    bgmEl.loop = true;
+    bgmEl.preload = 'auto';
+    bgmEl.volume = GAME.AUDIO.BGM_VOLUME;
+    bgmEl.addEventListener('error', () => {
+      console.error('[audio] 背景音乐加载失败:', bgmEl.src);
+    });
+  }
+
+  // 音效：fetch → decode → 缓存成 AudioBuffer
+  await Promise.all(Object.entries(GAME.AUDIO.SFX).map(async ([name, file]) => {
+    const url = GAME.AUDIO.DIR + file;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      sfxBuffers[name] = await audioCtx.decodeAudioData(await res.arrayBuffer());
+    } catch (e) {
+      // 缺一个音效只是没声音，不该影响玩 —— 报出来就够了
+      console.error('[audio] 音效加载失败:', url, e.message);
+    }
+  }));
+
+  audioReady = true;
+}
+
+/**
+ * 用户手势解锁。必须在 pointerdown 之类的手势回调里同步调用，
+ * 放到 await 之后就不再算"用户激活"了。
+ */
+function unlockAudio() {
+  if (!audioCtx || audioUnlocked) return;
+  audioUnlocked = true;
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  if (bgmEl) {
+    bgmEl.play().catch((e) => console.warn('[audio] 背景音乐播放被拦截:', e.name));
+  }
+}
+
+/**
+ * 播一个音效。
+ * @param name   'eat' | 'bomb'
+ * @param jitter 音高随机浮动幅度，0 = 不抖
+ */
+function playSfx(name, jitter = 0) {
+  if (!audioUnlocked || !audioReady) return;
+  const buf = sfxBuffers[name];
+  if (!buf) return;   // 文件缺失 → 静默跳过
+
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  if (jitter > 0) src.playbackRate.value = 1 + (Math.random() * 2 - 1) * jitter;
+  src.connect(sfxGain);
+  src.start();
+  // BufferSource 是一次性的，播完由 GC 回收，不需要手动清理
+}
+
+/** 页面切到后台时停掉背景音乐，回来再续上 */
+function setBgmPaused(paused) {
+  if (!bgmEl || !audioUnlocked) return;
+  if (paused) bgmEl.pause();
+  else bgmEl.play().catch(() => {});
+}
+
+/* =====================================================================
  *  M4 · 生命周期与 UI 状态机
  *
  *  init ──点击──> playing ──倒计时归零 / 吃到炸弹──> over ──点击──> playing
@@ -1898,6 +2037,9 @@ function bindGlobalTap() {
     // 素材或模型没就绪，点了不算 —— 这是"游戏开始了资产还没到"的唯一防线
     if (!readyToPlay) return;
 
+    // 音频解锁必须在手势回调里「同步」做，不能等到 await 之后
+    unlockAudio();
+
     if (gameState === 'init' || gameState === 'over') startRound();
   });
 }
@@ -1934,6 +2076,10 @@ preloadImages(criticalImageUrls(), showLoading).then(() => {
   bootMark('images');
   checkReady();
 });
+
+// 音频：和图片并行，且「不」进就绪门禁 —— 音频没到只是没声音，
+// 不该让玩家多等。文件很小，等玩家点击开始时基本都已解码完
+initAudio();
 
 // 滤镜素材（约 1MB）：后台加载，不阻塞开始
 preloadImages(deferredImageUrls()).then(() => {

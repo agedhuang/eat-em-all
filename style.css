@@ -619,10 +619,10 @@ body {
 /* 开场图。只在首次加载出现，点击后由 JS 直接 remove()，
    不是 display:none —— 从 DOM 移除才能物理保证 restart 时不会再冒出来。 */
 #ctaStart {
-  --cta-width: 86vw;   /* ★ 大小：屏幕宽度的百分比 ★ */
+  --cta-width: 90vw;   /* ★ 大小：屏幕宽度的百分比 ★ */
 
   position: fixed;
-  top: 40%;
+  top: 42%;
   left: 50%;
   transform: translate(-50%, -50%);
   z-index: 36;
